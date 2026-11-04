@@ -1,0 +1,35 @@
+[project]
+name = "grep-mcp-tools"
+version = "0.1.0"
+description = "Proxy-layer MCP server: downstream sees search/invoke/status, upstream tools are indexed as plain JSONL and searched on demand"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp==2.3.0",
+]
+
+[project.scripts]
+grep-mcp-tools = "grep_mcp_tools.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grep_mcp_tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "spike: SDK capability spikes (selection evidence, not product tests)",
+]
+addopts = "-m 'not spike'"

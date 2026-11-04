@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "hr": {
+      "command": "python",
+      "args": ["tests/e2e/demo_servers/hr.py"],
+      "env": {
+        "HR_MODE": "demo"
+      }
+    },
+    "itops": {
+      "url": "http://127.0.0.1:8123/mcp",
+      "headers": {
+        "X-Demo-Client": "grep-mcp-tools"
+      }
+    },
+    "audit": {
+      "url": "http://127.0.0.1:8124/sse",
+      "type": "sse"
+    }
+  },
+  "settings": {
+    "threshold": 30,
+    "refresh_interval": 600,
+    "fallback_sample_size": 10,
+    "description_max_servers": 15,
+    "handshake_timeout": 10,
+    "index_dir": null
+  }
+}

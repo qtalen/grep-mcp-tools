@@ -1,5 +1,8 @@
 # B05 release-pypi —— PyPI 公共包发布
 
+> 状态：⬜ 未开工（前置 B03；B04 结果可引述）
+> 形态：功能批
+
 ## 验收画面
 
 干净环境（无本仓库、无 uv 缓存）：创建一份两行 config 指向包内置 demo 上游 → `uvx grep-mcp-tools@0.1.0 --config config.json` 拉起成功、可搜可调；公司内网主机（外部条件，需实测）`uv tool install grep-mcp-tools==0.1.0` 成功，DeepAgents 以 console script 形态拉起正常；PyPI 页面 README 完整、包体只含运行所需。

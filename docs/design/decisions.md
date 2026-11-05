@@ -31,6 +31,7 @@
 | D-25 | 下游 list_changed 双线通知（2026-11-04，SDK 2.3.0 源码实证）：旧代协议（initialize 握手——v2.3.0 Client 默认与 langchain-mcp-adapters 等真实下游所在）由 middleware 捕获 `ctx.session` 后调 `send_tool_list_changed()`；新代协议（2026-07-28 subscriptions/listen）构造 MCPServer 时注入自定义 `SubscriptionBus`，刷新时 publish `ToolsListChanged`。通知为尽力而为：宿主不响应时 description 停在启动快照，由搜索路标/`check_mcp_status` 兜底 | 两代协议 SDK 不互相桥接（bus 事件只到 listen 流；旧代推送需 session 引用）；真实下游以旧代为主，只做新代等于对主路径不通知；只做旧代则对已实现 subscriptions/listen 的客户端宣告了不响的铃铛 | 只发旧代（新代客户端收不到）；只发新代（真实下游收不到）；每次刷新无条件发（无谓重拉与缓存抖动） |
 | D-26 | M2 上下文缩减判据 = 常驻工具定义体积（对齐 vision 的 "≥80% 缩减"）；"常驻 + 每次搜索响应体积"的总上下文作为 B04 参考指标另行报告，不作 gate | 同一批实验数据按两种口径可能一过一不过（vision 只比常驻；B04 指标含每次搜索响应），gate 必须唯一 | 以含搜索响应总上下文为判据（与 vision 矛盾、且随查询分布波动）；双判据事后择一（伪 gate） |
 | D-27 | Streamable HTTP 上游关闭时 `terminate_on_close=False`（不发 DELETE 终止会话） | SDK 默认 True：退出路径先向服务端发 DELETE 再取消任务组（`streamable_http.py:790-791`）；上游不可达时吃满 30s connect 超时（read 已按 D-06 置无限，可挂更久），拖慢代理退出。本地/内网代理场景服务端会话为内存态，DELETE 无收益 | 保留 DELETE（退出偶发多等 30s） |
+| D-28 | **E2E 套件耗时口径**（2026-11-05）：Windows 本机验收线 150s；验收命令 `uv run pytest tests/e2e -n 4`（pytest-xdist 并行，dev 依赖）；原 `<60s` 判据改作将来 Linux CI 的闸门 | 实测依据（实施回写）：每变体进程拉起 5~7s，81 例串行 337s；按"合并变体"收敛后 75 例串行 ~300s、`-n 4` 129~133s；`-n 6` 因并发争抢致健康上游握手超时，不可用。冷跑（首跑/Defender 扫描）再贵 30~50%，仅观察不设闸门。Linux 进程创建便宜约一个量级，60s 在 CI 可守 | 维持 60s（Windows 本机必然超标，验收无以为据）；不设预算（E2E 自然膨胀到 3~5 分钟，失去"每次都跑"的价值）；按用例砍覆盖硬凑预算（动摇矩阵完整性） |
 
 ## 已接受风险
 

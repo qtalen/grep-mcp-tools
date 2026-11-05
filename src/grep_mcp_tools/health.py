@@ -115,11 +115,11 @@ def _now() -> str:
 
 
 def startup_summary(registry: HealthRegistry) -> str:
-    """stderr 启动摘要一行：``x/y upstreams indexed (server FAILED: reason)``。"""
+    """stderr 启动摘要一行：``x/y upstreams connected (server FAILED: reason)``。"""
     entries = registry.entries()
     total = len(entries)
     live = [entry for entry in entries if entry.state == "live"]
-    base = f"{len(live)}/{total} upstreams indexed"
+    base = f"{len(live)}/{total} upstreams connected"
     failures = [
         f"{entry.server} FAILED: {entry.reason}"
         for entry in entries

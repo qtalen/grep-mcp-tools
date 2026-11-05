@@ -15,7 +15,7 @@ from grep_mcp_tools.health import HealthRegistry
 from grep_mcp_tools.index import close_all, handshake_all
 from grep_mcp_tools.server import ProxyServer
 
-DEMO_DIR = Path(__file__).resolve().parent / "demo_servers"
+DEMO_DIR = Path(__file__).resolve().parents[1] / "e2e" / "demo_servers"
 
 
 def free_port() -> int:

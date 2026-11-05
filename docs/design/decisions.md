@@ -28,6 +28,9 @@
 | D-22 | 搜索噪音接受：整行扫描下字段名/schema 结构词（如 "string"、"name"）命中一切；E2E 锁定现状 | 匹配域明确为索引行原始 JSON 整行文本（2026-11-04）：真·grep、零歧义、确定性最好；agent 极少拿这类词当关键词 | 匹配域排除 schema 键名；拼接字段值扫描（增量收益小、语义更难锁） |
 | D-23 | 上游健康注册表三态（live N 工具 / live 0 工具 / unreachable+原因）+ 四通道可见性：stderr 启动摘要、`tools_index/_status.json`（人类侧持久）；路标/description 计数后缀（被动）；`check_mcp_status` 详情（主动）。搜索只加载本轮握手成功服务的索引（陈旧索引隔离）；invoke 错误自包含原因；快照制不主动探测（B02 刷新保鲜） | 死上游对 agent 的唯一可靠信道是工具响应；代理无法判定"config 错"还是"服务挂"，只报告可观察事实（错误原文留给人类诊断）；主动重探会被握手超时拖住且与 B02 自愈重复 | 搜索遇死服务直接报错（破坏 fail-soft 部分可用性）；check_mcp_status 每次调用主动重连探测 |
 | D-24 | loopback 上游（127.0.0.1/localhost/::1）的 HTTP/SSE 连接禁用 httpx2 环境/系统代理（`trust_env=False`）；远程上游保持代理行为 | 实现证据（B01 探针）：下游宿主以受限环境拉起代理时（MCP stdio 默认 env 白名单不含 `NO_PROXY`），Windows 系统代理劫持 loopback 请求，死上游报 `Server returned an error response` 而非连接失败，健康原因失真 | 全局 `trust_env=False`（破坏企业代理场景）；要求用户配置 `NO_PROXY`（宿主 env 白名单不可控） |
+| D-25 | 下游 list_changed 双线通知（2026-11-04，SDK 2.3.0 源码实证）：旧代协议（initialize 握手——v2.3.0 Client 默认与 langchain-mcp-adapters 等真实下游所在）由 middleware 捕获 `ctx.session` 后调 `send_tool_list_changed()`；新代协议（2026-07-28 subscriptions/listen）构造 MCPServer 时注入自定义 `SubscriptionBus`，刷新时 publish `ToolsListChanged`。通知为尽力而为：宿主不响应时 description 停在启动快照，由搜索路标/`check_mcp_status` 兜底 | 两代协议 SDK 不互相桥接（bus 事件只到 listen 流；旧代推送需 session 引用）；真实下游以旧代为主，只做新代等于对主路径不通知；只做旧代则对已实现 subscriptions/listen 的客户端宣告了不响的铃铛 | 只发旧代（新代客户端收不到）；只发新代（真实下游收不到）；每次刷新无条件发（无谓重拉与缓存抖动） |
+| D-26 | M2 上下文缩减判据 = 常驻工具定义体积（对齐 vision 的 "≥80% 缩减"）；"常驻 + 每次搜索响应体积"的总上下文作为 B04 参考指标另行报告，不作 gate | 同一批实验数据按两种口径可能一过一不过（vision 只比常驻；B04 指标含每次搜索响应），gate 必须唯一 | 以含搜索响应总上下文为判据（与 vision 矛盾、且随查询分布波动）；双判据事后择一（伪 gate） |
+| D-27 | Streamable HTTP 上游关闭时 `terminate_on_close=False`（不发 DELETE 终止会话） | SDK 默认 True：退出路径先向服务端发 DELETE 再取消任务组（`streamable_http.py:790-791`）；上游不可达时吃满 30s connect 超时（read 已按 D-06 置无限，可挂更久），拖慢代理退出。本地/内网代理场景服务端会话为内存态，DELETE 无收益 | 保留 DELETE（退出偶发多等 30s） |
 
 ## 已接受风险
 

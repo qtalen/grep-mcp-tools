@@ -15,7 +15,7 @@
 
 ## 实施要点
 
-- **demo 上游入包**：随包发布 `python -m grep_mcp_tools.demo_server`（单个内置假上游，二十行级 FastMCP，**进 wheel**），README 快速开始与 config 示例指向它——干净环境 uvx 即可跑通。tests/e2e 的全套假上游（hr/itops/fleet_gen/broken 等）仍留仓库不进包。
+- **demo 上游入包**：随包发布 `python -m grep_mcp_tools.demo_server`（单个内置假上游，二十行级 MCPServer，**进 wheel**），README 快速开始与 config 示例指向它——干净环境 uvx 即可跑通。tests/e2e 的全套假上游（hr/itops/fleet_gen/broken 等）仍留仓库不进包。
 - **打包**：wheel 瘦身——tests/、docs/ 不进 wheel（留在仓库与 sdist）；console script `grep-mcp-tools`（模块 `grep_mcp_tools`）；`pyproject.toml` 元数据完整（描述、分类、license、Python ≥3.11）。
 - **公共包纪律**：包与 README 不得含任何公司内部信息（真实服务名、内网地址、真实 config）；示例一律用内置 demo 上游；README 部署节含 DeepAgents/langchain-mcp-adapters 挂载示例（command/args 形态）与 Claude Code 挂载示例。
 - **README**：产品故事（上下文爆炸→按需检索，含价值账数字——以 B04 实测数据为准）；快速开始；config 格式说明；部署节（公司镜像源场景：uv/pip 经环境变量选源）；系统提示建议行（"外部能力都在 search_mcp_tool 后面，先搜后问"——产品控制范围外的最后一道保险）。

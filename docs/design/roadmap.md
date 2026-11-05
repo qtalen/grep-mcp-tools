@@ -20,7 +20,7 @@
 | [B04 agent 测试台](batches/B04-agent-harness.md) | 真 LLM 量化效果：A/B 基线 + 消融 | 地基批 | ⬜ 未开工 | B03 |
 | [B05 发布](batches/B05-release-pypi.md) | PyPI 公共包 0.1.0 | 功能批 | ⬜ 未开工 | B03（B04 结果可引述） |
 
-## 开放项总账（已立项想法，未排批次）
+## 开放项与遗留总账（已立项想法 + 待修遗留）
 
 | 项 | 说明 | 状态 |
 |---|---|---|
@@ -29,11 +29,12 @@
 | 代理 HTTP 团队共享形态 | 多客户端并发、索引共享、鉴权设计（见 D-16） | 💤 v2 候选 |
 | 治理/白名单 | 按下游客户端过滤可搜可调的上游工具（企业管控诉求） | 💤 v2 候选 |
 | 上游 list_changed 精细化 | 从定时刷新升级为事件驱动即时重索引（见 D-17） | 💤 v2 候选 |
-| B01 遗留：startup summary 把 live 0 工具计作 indexed | live 0 工具上游按契约无 jsonl，摘要措辞与"索引文件"不完全对应；不影响行为 | 💤 待 B03 顺带修 |
-| B01 遗留：`terminate_on_close` 对不可达 HTTP 上游可能多等 30s | 退出回收路径先等传输关闭再取消，B03 生命周期用例覆盖后收紧 | 💤 待 B03 |
+| B01 遗留：startup summary 把 live 0 工具计作 indexed | 期望文案改为 `x/y upstreams connected`（握手成功即 connected，0 工具上游也计入）；B03 A 区加断言 | 💤 待 B03 |
+| B01 遗留：`terminate_on_close` 对不可达 HTTP 上游可能多等 30s | 已裁决 D-27：`terminate_on_close=False`（不发 DELETE）；B03 生命周期用例断言退出耗时 | ✅ 裁决 D-27（B03 落地） |
 | 同一 JSON 文件内字面重复键无法检测 | `json.loads` 后写覆盖语义（stdlib 限制）；大小写不敏感重名已 fail-fast 拦截 | 💤 接受现状 |
 
 ## 记录
 
 - 2026-11-04 探索修订：B02 意图移除"HTTP 上游"（三传输握手提前入 B01）。
 - 2026-11-04 B01 归档：登记行翻 ✅ 压索引；M1 里程碑标为进行中（1/3 批次）；当前批次指针推进到 B02；B01 审核遗留（startup summary 措辞、`terminate_on_close` 多等 30s、json 文件内重复键检测）转入开放项总账。B01 契约已回写 architecture（0 工具删旧索引、读超时无限、BOM、settings 校验、相对 index_dir），新裁决 D-24 已入台账。
+- 2026-11-04 设计审核回写：开放项表改名（并入 B01 遗留）；startup summary 期望文案定为 `x/y upstreams connected`；`terminate_on_close` 裁决 D-27（`terminate_on_close=False`）；同一 JSON 文件内字面重复键维持"接受现状"，不进 E2E 正文。

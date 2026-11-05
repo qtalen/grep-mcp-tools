@@ -60,7 +60,12 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
   静态触发文案(何时该搜) + 服务清单(名+工具数; 超上限按服务名字典序取前 N
   并加 "(of M)" 后缀——选取定死, 防跨重启抖动触发假 list_changed;
   死服务不计入清单, 有死者加 (k unavailable) 计数后缀);
-  定时刷新后清单若有变, 向下游发 MCP list_changed 通知触发重拉
+  定时刷新后清单若有变, 向下游发 MCP list_changed 通知触发重拉:
+    旧代协议(initialize 握手) 经 middleware 捕获的 session 调
+      send_tool_list_changed(); 新代协议(2026-07-28) 向注入的
+      SubscriptionBus publish ToolsListChanged (D-25)。
+    通知为尽力而为: 宿主不响应时 description 停在启动快照,
+    由搜索路标 / check_mcp_status 兜底
 ```
 
 ### 连接模型
@@ -70,8 +75,8 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
 - **上游握手跨上游并发执行**（总时长 ≈ 单上游 handshake_timeout 上限，不随上游数线性增长）；急切但有限等待——应答自身 initialize 前完成握手与索引，不因单个上游故障中止启动。
 - **同一上游的 invoke 调用串行化**（保守默认：上游服务端实现不一定支持并发请求；不分传输统一串行，将来按传输放宽属优化非修正）；跨上游并发执行。
 - 定时刷新复用现有连接重拉 `list_tools`；连接已死则重连（即 fail-soft 自愈）。
-- `handshake_timeout` 只适用握手阶段；invoke 路径无代理级超时（黄金律 1，不矛盾）。**实现口径**：HTTP/SSE 常驻客户端的读超时置无限（连接/写/池超时保留 30s 防挂死），SDK 默认的 300s 读超时被显式覆盖；stdio 无超时。
-- 下游客户端断开时，代理与其 spawn 的全部 stdio 上游子进程按进程组回收，不留孤儿（Windows 专项处理）。
+- `handshake_timeout` 适用握手与刷新重拉两个阶段（刷新重拉超时按失败处理走同回合自愈，防半死上游挂住整轮刷新）；invoke 路径无代理级超时（黄金律 1，不矛盾）。**实现口径**：HTTP/SSE 常驻客户端的读超时置无限（连接/写/池超时保留 30s 防挂死），SDK 默认的 300s 读超时被显式覆盖；stdio 无超时。Streamable HTTP 传输关闭时 `terminate_on_close=False`（不发 DELETE 会话终止；本地/内网场景无收益，且不可达上游会吃满 30s connect 超时拖慢退出，见 D-27）。
+- 下游客户端断开时，代理与其 spawn 的全部 stdio 上游子进程按进程组回收，不留孤儿（Windows 专项处理；B03 落地）。
 
 ## 稳定契约
 
@@ -86,7 +91,7 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
 | `refresh_interval` | int | 600 | 定时刷新间隔（秒） |
 | `fallback_sample_size` | int | 10 | AND=0 时 OR 兜底返回的样品条数 |
 | `description_max_servers` | int | 15 | description 注入服务清单上限，超出降级为部分+总数 |
-| `handshake_timeout` | int | 10 | 上游握手超时（秒），仅握手阶段 |
+| `handshake_timeout` | int | 10 | 上游握手超时（秒），适用握手与刷新重拉两阶段（重拉超时按失败走同回合自愈） |
 | `index_dir` | str | null | 索引目录；null = config 同目录下 `tools_index/`；相对路径按 config 文件同目录解析（防不同 cwd 产生两套索引） |
 
 - **JSONL 记录字段**：`server`、`name`、`title`、`description`、`inputSchema`、`annotations`（readOnlyHint/destructiveHint 等破坏性提示必须保留，下游靠它判断工具能否随便调）。`server` 字段兼职搜索的作用域关键词：搜 "hr leave" 即在 hr 服务内找 leave 相关工具。
@@ -94,7 +99,8 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
 - **匹配语义**：大小写不敏感、子串、非正则（正则元字符按字面处理）；多关键词 AND 优先，AND=0 时 OR 兜底排序（标注 partial match）；排序定死——**OR 主键=命中词数降序，同分并列按（服务文件名, 行号）；AND 下命中词数为常数 N，退化为纯（服务文件名, 行号）位置序**——保证确定性。
 - **0 工具上游**：握手成功但工具数为 0 → 不生成索引文件（若存在上一轮同名文件须删除），服务保留在清单中（显示 0 tools）。
 - **性能预算**：1000+ 工具索引搜索 <200ms；超量拒绝路径不做全量格式化、快速返回（B03 冒烟阈值断言）。
-- **日志**：只走 stderr。stdout 是 stdio 协议通道，零污染是生死线。
+- **日志**：只走 stderr。stdout 是 stdio 协议通道，零污染是生死线。刷新轮纪律（B02）：正常轮零输出；轮内某上游重握手失败记一行（服务名+原因）；单轮异常（含轮尾 `_status.json` 写盘失败）记一行且刷新循环不死。
+- **退出时序**（B02）：先 cancel 刷新循环并等待其结束，再逆序关闭全部上游连接——防刷新重握手与 teardown 竞态留下孤儿 stdio 进程。
 - **响应文本语言**：代理生成的所有提示/路标/用法文本用英文（LLM 通用语）；中文关键词照常可搜，子串匹配语言无关。
 
 ## 技术选型
@@ -113,3 +119,5 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
 - 2026-11-04 探索修订：三工具签名（D-01 修订）；健康注册表与健康通道（D-23）；config 校验清单（含大小写不敏感重名、传输消歧、服务名白名单）；匹配域明确为整行扫描（D-22 补）；排序定死（OR 主键=命中词数、并列位置序）；握手跨上游并发；注入清单字典序选取；`_status.json` 最小契约与原子写；"本轮=最近一次握手尝试轮"定义。
 - 2026-11-04 实施回写（B01 开工）：SDK 钉 `mcp==2.3.0`（v2 API，词汇替换 FastMCP→MCPServer、ClientSession→Client）；连接模型补"每上游专用任务持有 AsyncExitStack"（anyio cancel scope 同任务约束，实现证据）与"loopback 上游绕过系统代理"（D-24，探针实测证据）；config 白名单措辞修正（`__` 禁令需显式检查，正则不覆盖）。
 - 2026-11-04 审核回写：0 工具上游须删除上一轮索引文件（防幽灵工具与 target 校验失效）；HTTP/SSE invoke 读超时显式置无限（对齐 D-06，覆盖 SDK 默认 300s）；索引写盘失败按 fail-soft 记 unreachable（不得谎报 live）；settings 整数键 ≥1、未知键 fail-fast、相对 `index_dir` 按 config 目录解析；config 读取容忍 BOM；空配置路标改为"no upstream services are configured"。
+- 2026-11-04 设计审核回写：注入面补 list_changed 双线机制（D-25，旧代 middleware session / 新代注入 SubscriptionBus）；连接模型补 `terminate_on_close=False`（D-27）与进程组回收的"B03 落地"标注；M2 判据口径见 D-26。
+- 2026-11-04 B02 change 审核回写：`handshake_timeout` 适用面扩展至刷新重拉（超时按失败走自愈）；补刷新轮日志纪律与退出时序（cancel 刷新先于 close_all）；旧代能力位 `tools.listChanged=false`（SDK 默认 NotificationOptions 全 False）需 wrap `create_initialization_options` 修正——细则见批次文档与 change design。

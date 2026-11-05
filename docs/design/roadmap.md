@@ -4,18 +4,18 @@
 
 | 里程碑 | 定义 | 判据 | 状态 |
 |---|---|---|---|
-| M1 内部可用 | 代理全行为面 + 确定性质量全绿 | B01-B03 完成；`pytest tests/e2e` 全绿 <60s；probe 可演示 | 🔨 进行中（B01 ✅ 2026-11-04；待 B02-B03） |
+| M1 内部可用 | 代理全行为面 + 确定性质量全绿 | B01-B03 完成；`pytest tests/e2e` 全绿 <60s；probe 可演示 | 🔨 进行中（B01 ✅ 2026-11-04、B02 ✅ 2026-11-05；待 B03） |
 | M2 效果已证明 | 三条成功标准由 A/B 实验达标 | B04 完成：成功率差 ≤10pp、上下文省 ≥80%、自主发现率 ≥80% | ⬜ |
 | M3 公开发布 | PyPI 0.1.0 可安装 | B05 完成：干净环境 `uvx grep-mcp-tools@0.1.0` 拉起可用 | ⬜ |
 
-> **当前批次指针**：下一个开工批次 = **B02**（登记表顺序即执行顺序；此指针随归档更新）。
+> **当前批次指针**：下一个开工批次 = **B03**（登记表顺序即执行顺序；此指针随归档更新）。
 
 ## 批次登记表（顺序即执行顺序，可重排）
 
 | 批次 | 一句话意图 | 形态 | 状态 | 依赖 |
 |---|---|---|---|---|
 | [B01 行走骨架](batches/B01-walking-skeleton.md) | 最小代理全链路 + 交互探针 | 功能批 | ✅ 已归档 2026-11-04 | — |
-| [B02 行为面补全](batches/B02-full-behavior.md) | 定时刷新、description 注入、fail-soft 自愈全套 | 功能批 | ⬜ 未开工 | B01 |
+| [B02 行为面补全](batches/B02-full-behavior.md) | 定时刷新、description 注入、fail-soft 自愈全套 | 功能批 | ✅ 已归档 2026-11-05 | B01 |
 | [B03 E2E 全矩阵](batches/B03-e2e-matrix.md) | 六区 50+ 用例确定性自动化 | 地基批 | ⬜ 未开工 | B02 |
 | [B04 agent 测试台](batches/B04-agent-harness.md) | 真 LLM 量化效果：A/B 基线 + 消融 | 地基批 | ⬜ 未开工 | B03 |
 | [B05 发布](batches/B05-release-pypi.md) | PyPI 公共包 0.1.0 | 功能批 | ⬜ 未开工 | B03（B04 结果可引述） |
@@ -38,3 +38,4 @@
 - 2026-11-04 探索修订：B02 意图移除"HTTP 上游"（三传输握手提前入 B01）。
 - 2026-11-04 B01 归档：登记行翻 ✅ 压索引；M1 里程碑标为进行中（1/3 批次）；当前批次指针推进到 B02；B01 审核遗留（startup summary 措辞、`terminate_on_close` 多等 30s、json 文件内重复键检测）转入开放项总账。B01 契约已回写 architecture（0 工具删旧索引、读超时无限、BOM、settings 校验、相对 index_dir），新裁决 D-24 已入台账。
 - 2026-11-04 设计审核回写：开放项表改名（并入 B01 遗留）；startup summary 期望文案定为 `x/y upstreams connected`；`terminate_on_close` 裁决 D-27（`terminate_on_close=False`）；同一 JSON 文件内字面重复键维持"接受现状"，不进 E2E 正文。
+- 2026-11-05 B02 归档：登记行翻 ✅ 压索引；M1 里程碑标为进行中（2/3 批次）；当前批次指针推进到 B03。B02 契约已同步主 specs（新建 tool-description capability，tool-index/tool-invoke/upstream-health 合入刷新与通知 requirements）；实施记录（含 SDK 2.3.0 新代协议通知投递认知）见归档 change 的 design.md。

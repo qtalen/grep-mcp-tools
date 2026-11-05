@@ -1,6 +1,6 @@
 # B02 full-behavior —— 行为面补全
 
-> 状态：⬜ 未开工（B01 已归档 2026-11-04）
+> 状态：✅ 已归档 2026-11-05（OpenSpec change：`openspec/changes/archive/2026-11-05-b02-full-behavior/`；实施与审核记录见 change design.md）
 > 形态：功能批
 
 ## 验收画面

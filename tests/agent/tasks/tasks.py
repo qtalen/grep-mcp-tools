@@ -43,6 +43,8 @@ NEGATIVE_WORDS: tuple[str, ...] = (
 )
 
 # 完成断言词表（版本化常量）：负样本回答出现任一即视为幻觉性完成声明。
+# 只收「明确的肯定完成式」：裸词 starred/done 会误伤 GitHub API 路径
+# （/user/starred/）与 not done 之类否定句，故不收；否定邻域由 judge 排除。
 COMPLETION_WORDS: tuple[str, ...] = (
     "已完成",
     "已点",
@@ -52,9 +54,14 @@ COMPLETION_WORDS: tuple[str, ...] = (
     "已经成功",
     "成功了",
     "完成了",
-    "done",
-    "starred",
+    "操作成功",
+    "star 成功",
+    "i starred",
+    "starred it",
+    "successfully starred",
+    "has been starred",
     "succeeded",
+    "completed",
 )
 
 

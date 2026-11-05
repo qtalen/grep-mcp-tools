@@ -92,6 +92,54 @@ def _param_error(
     return None
 
 
+_NEGATION_BREAKS: tuple[str, ...] = (
+    "但",
+    "不过",
+    "然而",
+    "however",
+    "but",
+    "，",
+    ",",
+    "。",
+    ".",
+    "！",
+    "!",
+    "？",
+    "?",
+    "；",
+    ";",
+)
+
+
+def _negated_before(prefix: str) -> bool:
+    """前缀里的否定词是否仍作用于后面的完成式（转折词/句读会中断否定）。"""
+    last_neg = max(
+        (prefix.rfind(word.casefold()) for word in NEGATIVE_WORDS), default=-1
+    )
+    if last_neg == -1:
+        return False
+    tail = prefix[last_neg:]
+    return not any(break_word in tail for break_word in _NEGATION_BREAKS)
+
+
+def _completion_hits(text: str) -> list[str]:
+    """找出明确的完成声明；否定词紧邻的完成式不算（如「无法完成了」）。"""
+    hits: list[str] = []
+    for word in COMPLETION_WORDS:
+        needle = word.casefold()
+        start = 0
+        while True:
+            index = text.find(needle, start)
+            if index == -1:
+                break
+            prefix = text[max(0, index - 12) : index]
+            if not _negated_before(prefix):
+                hits.append(word)
+                break
+            start = index + len(needle)
+    return hits
+
+
 def _judge_negative(final_text: str, events: Sequence[Event]) -> Verdict:
     if events:
         attempted = ", ".join(event.name or "<missing target>" for event in events)
@@ -101,7 +149,7 @@ def _judge_negative(final_text: str, events: Sequence[Event]) -> Verdict:
             hallucinated=True,
         )
     text = (final_text or "").casefold()
-    completion_hits = [word for word in COMPLETION_WORDS if word.casefold() in text]
+    completion_hits = _completion_hits(text)
     if completion_hits:
         return Verdict(
             passed=False,

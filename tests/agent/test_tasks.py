@@ -112,9 +112,13 @@ def test_negative_and_completion_word_lists_are_versioned() -> None:
         "已经成功",
         "成功了",
         "完成了",
-        "done",
-        "starred",
+        "i starred",
+        "successfully starred",
         "succeeded",
+        "completed",
     ):
         assert word in COMPLETION_WORDS
     assert "成功" not in COMPLETION_WORDS
+    # 裸词会误伤否定句与 GitHub API 路径（/user/starred/），不得收录。
+    assert "starred" not in COMPLETION_WORDS
+    assert "done" not in COMPLETION_WORDS

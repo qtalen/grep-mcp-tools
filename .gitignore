@@ -226,3 +226,7 @@ __marimo__/
 
 # grep-mcp-tools index output (generated at startup; never commit)
 tools_index/
+
+# B04 agent harness transcripts (generated runs; keep the directory itself)
+tests/agent/transcripts/*
+!tests/agent/transcripts/.gitkeep

@@ -2,7 +2,8 @@
 
 设计来源：`openspec/changes/b03-e2e-matrix/design.md`『e2e 唯一形态 =
 subprocess 黑盒』与批次文档『执行结构』。本模块只做机械工具：
-- 端口/等待：`free_port` / `pick_ports` / `wait_port_accepts` / `wait_until`；
+- 端口/等待：从 `tests/shared/proc.py` re-export（`free_port` / `pick_ports` /
+  `wait_port_accepts` / `wait_until` / `wait_until_async`），e2e 与 agent 两树共用；
 - 配置：`write_config` / `read_index_lines`；
 - 代理进程：`ProxyProcess`（stderr 行缓冲 + 退出时序）；
 - 裸行 JSON-RPC 客户端：`RawSession`（共享同一代理进程，SDK Client 会自己
@@ -15,12 +16,9 @@ subprocess 黑盒』与批次文档『执行结构』。本模块只做机械工
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
-import inspect
 import json
 import queue
-import socket
 import subprocess
 import sys
 import threading
@@ -28,10 +26,18 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator
 
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
+
+from tests.shared.proc import (
+    free_port,
+    pick_ports,
+    wait_port_accepts,
+    wait_until,
+    wait_until_async,
+)
 
 __all__ = [
     "DEMO_DIR",
@@ -52,68 +58,6 @@ __all__ = [
 DEMO_DIR = Path(__file__).resolve().parent / "demo_servers"
 
 PROTOCOL_VERSION = "2025-11-25"
-
-
-# ---------- 端口与等待 ----------
-
-
-def free_port() -> int:
-    """向系统要一个空闲的 127.0.0.1 端口。"""
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-def pick_ports(count: int) -> list[int]:
-    """取互不相同的空闲端口（连续 free_port() 可能重复——死条目会撞上活服务）。"""
-    ports: list[int] = []
-    while len(ports) < count:
-        port = free_port()
-        if port not in ports:
-            ports.append(port)
-    return ports
-
-
-def wait_port_accepts(port: int, timeout: float = 20.0) -> None:
-    """同步等 127.0.0.1:port 能建立 TCP 连接。"""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return
-        except OSError:
-            time.sleep(0.1)
-    raise TimeoutError(f"demo server did not accept connections on port {port}")
-
-
-def wait_until(
-    predicate: Callable[[], Any], deadline: float = 10.0, interval: float = 0.1
-) -> Any:
-    """同步轮询直到 predicate 返回真值；超时 raise TimeoutError。"""
-    end = time.monotonic() + deadline
-    while True:
-        value = predicate()
-        if value:
-            return value
-        if time.monotonic() >= end:
-            raise TimeoutError(f"condition not met within {deadline}s: {predicate!r}")
-        time.sleep(interval)
-
-
-async def wait_until_async(
-    predicate: Callable[[], Any], deadline: float = 10.0, interval: float = 0.1
-) -> Any:
-    """异步轮询版（predicate 可为协程函数）。"""
-    end = time.monotonic() + deadline
-    while True:
-        value = predicate()
-        if inspect.isawaitable(value):
-            value = await value
-        if value:
-            return value
-        if time.monotonic() >= end:
-            raise TimeoutError(f"condition not met within {deadline}s: {predicate!r}")
-        await asyncio.sleep(interval)
 
 
 # ---------- 配置与索引 ----------

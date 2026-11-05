@@ -1,6 +1,6 @@
 # B03 e2e-matrix —— 确定性 E2E 全矩阵
 
-> 状态：⬜ 未开工（前置 B02）
+> 状态：✅ 已归档 2026-11-05（OpenSpec change：`openspec/changes/archive/2026-11-05-b03-e2e-matrix/`；实施与审核记录见 change design.md）
 > 形态：地基批
 
 ## 验收画面

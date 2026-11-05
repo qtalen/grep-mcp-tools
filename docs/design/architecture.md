@@ -76,7 +76,7 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
 - **同一上游的 invoke 调用串行化**（保守默认：上游服务端实现不一定支持并发请求；不分传输统一串行，将来按传输放宽属优化非修正）；跨上游并发执行。
 - 定时刷新复用现有连接重拉 `list_tools`；连接已死则重连（即 fail-soft 自愈）。
 - `handshake_timeout` 适用握手与刷新重拉两个阶段（刷新重拉超时按失败处理走同回合自愈，防半死上游挂住整轮刷新）；invoke 路径无代理级超时（黄金律 1，不矛盾）。**实现口径**：HTTP/SSE 常驻客户端的读超时置无限（连接/写/池超时保留 30s 防挂死），SDK 默认的 300s 读超时被显式覆盖；stdio 无超时。Streamable HTTP 传输关闭时 `terminate_on_close=False`（不发 DELETE 会话终止；本地/内网场景无收益，且不可达上游会吃满 30s connect 超时拖慢退出，见 D-27）。
-- 下游客户端断开时，代理与其 spawn 的全部 stdio 上游子进程按进程组回收，不留孤儿（Windows 专项处理；B03 落地）。
+- 下游客户端断开时，代理与其 spawn 的全部 stdio 上游子进程按进程组回收，不留孤儿（Windows 专项处理；B03 已验证）。
 
 ## 稳定契约
 
@@ -121,3 +121,4 @@ invoke_this_tool(target, params) --> target 解析(见契约) -->
 - 2026-11-04 审核回写：0 工具上游须删除上一轮索引文件（防幽灵工具与 target 校验失效）；HTTP/SSE invoke 读超时显式置无限（对齐 D-06，覆盖 SDK 默认 300s）；索引写盘失败按 fail-soft 记 unreachable（不得谎报 live）；settings 整数键 ≥1、未知键 fail-fast、相对 `index_dir` 按 config 目录解析；config 读取容忍 BOM；空配置路标改为"no upstream services are configured"。
 - 2026-11-04 设计审核回写：注入面补 list_changed 双线机制（D-25，旧代 middleware session / 新代注入 SubscriptionBus）；连接模型补 `terminate_on_close=False`（D-27）与进程组回收的"B03 落地"标注；M2 判据口径见 D-26。
 - 2026-11-04 B02 change 审核回写：`handshake_timeout` 适用面扩展至刷新重拉（超时按失败走自愈）；补刷新轮日志纪律与退出时序（cancel 刷新先于 close_all）；旧代能力位 `tools.listChanged=false`（SDK 默认 NotificationOptions 全 False）需 wrap `create_initialization_options` 修正——细则见批次文档与 change design。
+- 2026-11-05 B03 归档回写：进程组回收标注由"B03 落地"改为"B03 已验证"（E 区孤儿用例实测达标，SDK Windows Job Object）；性能预算由 F 区冒烟锁定（1000+ 工具搜索实测 18~22ms，阈值断言 200ms）。

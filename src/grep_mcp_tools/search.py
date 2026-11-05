@@ -15,6 +15,8 @@ __all__ = [
     "LiveServer",
     "SearchContext",
     "SearchResponse",
+    "render_search_description",
+    "roster_signature",
     "search",
 ]
 
@@ -48,6 +50,72 @@ class IndexedTool:
 class LiveServer:
     name: str
     tool_count: int
+
+
+# ---------- description 注入面（下游 tools/list 的动态清单） ----------
+
+
+def _visible_servers(
+    live_servers: list[LiveServer] | tuple[LiveServer, ...], max_servers: int
+) -> tuple[list[LiveServer], int]:
+    """字典序排序；超上限取前 N（选取定死，防跨轮抖动）。返回 (可见集, 总数)。"""
+    ordered = sorted(live_servers, key=lambda s: s.name)
+    if len(ordered) <= max_servers:
+        return ordered, len(ordered)
+    return ordered[:max_servers], len(ordered)
+
+
+def render_search_description(
+    trigger_text: str,
+    live_servers: list[LiveServer] | tuple[LiveServer, ...],
+    unavailable_count: int,
+    max_servers: int,
+) -> str:
+    """拼接 search_mcp_tool 的动态 description：触发文案 + 服务清单。
+
+    清单为字典序单行（名+工具数）；超上限降级为前 N + ``(of M)`` 总数
+    标注；死者不计入清单、以 ``(k unavailable)`` 计数后缀 + 指针呈现
+    （被动信道纪律）；空配置与全挂文案可区分。
+    """
+    if not live_servers:
+        if unavailable_count:
+            return (
+                f"{trigger_text}\n\nno upstream services currently connected "
+                f"({unavailable_count} unavailable). Run check_mcp_status for details."
+            )
+        return f"{trigger_text}\n\nno upstream services configured"
+    visible, total = _visible_servers(live_servers, max_servers)
+    entries = ", ".join(
+        f"{s.name} ({s.tool_count} tool{'s' if s.tool_count != 1 else ''})"
+        for s in visible
+    )
+    header = (
+        "Connected services"
+        if total <= max_servers
+        else f"Connected services (of {total})"
+    )
+    line = f"{header}: {entries}"
+    if unavailable_count:
+        line += f" ({unavailable_count} unavailable - run check_mcp_status)"
+    return f"{trigger_text}\n\n{line}"
+
+
+def roster_signature(
+    live_servers: list[LiveServer] | tuple[LiveServer, ...],
+    unavailable_count: int,
+    max_servers: int,
+) -> tuple:
+    """description 文本的决定因素：可见集 (server, tool_count) + 总数 + 死者数。
+
+    未超上限时可见集即 live 全集；超上限时被隐藏服务的变化不改变签名
+    （description 文本未变，不触发重注册与通知）。
+    """
+    visible, total = _visible_servers(live_servers, max_servers)
+    return (
+        tuple((s.name, s.tool_count) for s in visible),
+        total,
+        unavailable_count,
+    )
 
 
 @dataclass(frozen=True)

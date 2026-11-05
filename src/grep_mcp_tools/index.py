@@ -169,11 +169,18 @@ def http_client_factory(url: str):
 
 @asynccontextmanager
 async def _http_transport(entry: ServerEntry):
-    """Streamable HTTP 传输；loopback 绕过代理，headers 经客户端注入。"""
+    """Streamable HTTP 传输；loopback 绕过代理，headers 经客户端注入。
+
+    terminate_on_close=False（D-27）：关闭时不向服务端发 DELETE 会话终止
+    ——内网本地上游会话为内存态、DELETE 无收益，且上游不可达时会吃满
+    30s connect 超时拖慢代理退出（SDK 默认 True 时先 DELETE 再取消任务组）。
+    """
     url = entry.url or ""
     factory = http_client_factory(url)
     async with factory(headers=entry.headers or None) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as streams:
+        async with streamable_http_client(
+            url, http_client=http_client, terminate_on_close=False
+        ) as streams:
             yield streams
 
 
@@ -211,8 +218,11 @@ async def handshake_all(
 ) -> dict[str, "UpstreamConnection"]:
     """跨上游并发握手；急切、有限等待、fail-soft。
 
-    返回本轮握手成功的连接（名字 → UpstreamConnection），由调用方在
-    退出时用 :func:`close_all` 逆序回收。
+    返回 **全部** 配置上游的连接（名字 → UpstreamConnection，config 镜像）：
+    启动失败的也在场（其 ``client`` 为 None）——自愈对同一对象 stop/start，
+    字典结构恒等于 config，invoke 以 ``client is None`` 单条件判死。
+    由调用方在退出时用 :func:`close_all` 逆序回收（``stop()`` 对从未
+    握手成功的连接是安全空跑）。
     """
     index_root = config.index_root()
     timeout = config.settings.handshake_timeout
@@ -220,11 +230,7 @@ async def handshake_all(
     await asyncio.gather(
         *(connection.start(timeout, registry, index_root) for connection in connections)
     )
-    return {
-        connection.entry.name: connection
-        for connection in connections
-        if connection.client is not None
-    }
+    return {connection.entry.name: connection for connection in connections}
 
 
 async def close_all(connections: Iterable["UpstreamConnection"]) -> None:
@@ -263,6 +269,7 @@ class UpstreamConnection:
         registry: HealthRegistry,
         index_root: Path,
     ) -> None:
+        self.client = None  # 防御：不变式对任何调用点成立（非 live 态必 None）
         loop = asyncio.get_running_loop()
         self._ready = loop.create_future()
         self._shutdown = asyncio.Event()
@@ -318,3 +325,62 @@ class UpstreamConnection:
             except Exception:
                 # 关闭路径上的清理噪音不阻塞整体退出
                 pass
+        # 不变式：非 live 态 client 必为 None——invoke 以 client is None 单条件
+        # 判死，残留旧值会让"曾 live 后死亡"的服务落到"工具不存在"错误分支。
+        self.client = None
+
+    def _is_alive(self) -> bool:
+        return (
+            self.client is not None
+            and self._task is not None
+            and not self._task.done()
+        )
+
+    async def _restart(
+        self,
+        timeout: int,
+        registry: HealthRegistry,
+        index_root: Path,
+    ) -> None:
+        """同回合自愈：stop（清 client）+ start（重握手，含 stdio respawn）。"""
+        await self.stop()
+        await self.start(timeout, registry, index_root)
+
+    async def refresh(
+        self,
+        timeout: int,
+        registry: HealthRegistry,
+        index_root: Path,
+    ) -> None:
+        """刷新单元：活着重拉 ``list_tools``，死了同回合 stop+start（自愈）。
+
+        锁纪律：该上游 invoke 串行锁被长调用占用时跳过本轮（不等待、
+        不中断，维持上一轮快照——旧但自洽）。重拉受 ``timeout`` 上界
+        （防半死上游挂住整轮刷新）；重拉失败/超时同回合 stop+start 一次
+        重试，重试终态即本轮终态。成功路径沿用启动握手纪律：写索引失败
+        记 unreachable 不谎报 live、0 工具删残留文件、注册表翻转。
+        """
+        if self.lock.locked():
+            return
+        async with self.lock:
+            if not self._is_alive():
+                await self._restart(timeout, registry, index_root)
+                return
+            try:
+                async with asyncio.timeout(timeout):
+                    listing = await self.client.list_tools()
+                tools = list(listing.tools)
+            except Exception:
+                # 半死（重拉抛错/超时）→ 同回合 stop+start 重握手；
+                # 重启成败由 start 内部按既有纪律记录，这里不额外出声。
+                await self._restart(timeout, registry, index_root)
+                return
+            try:
+                write_tools_index(self.entry.name, tools, index_root)
+            except Exception as exc:  # 写盘失败（磁盘满/权限/文件被占用）→ 不得谎报 live
+                reason = f"index write failed: {describe_error(exc)}"
+                registry.record_unreachable(self.entry.name, reason=reason)
+                _log_failure(self.entry.name, reason)
+                await self.stop()  # 连接虽活但本轮终态为 unreachable
+                return
+            registry.record_live(self.entry.name, tool_count=len(tools))

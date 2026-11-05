@@ -173,7 +173,8 @@ async def test_dead_entry_is_fail_soft_and_does_not_block(tmp_path: Path) -> Non
     connections = await handshake_all(config, registry)
     elapsed = time.perf_counter() - started
     try:
-        assert set(connections) == {"hr"}
+        assert set(connections) == {"hr", "dead_http"}  # config 镜像：死者也在场
+        assert connections["dead_http"].client is None  # 判死单条件
         live = registry.get("hr")
         assert live is not None and live.state == "live"
         dead = registry.get("dead_http")
@@ -205,7 +206,8 @@ async def test_handshake_timeout_recorded_with_reason(tmp_path: Path) -> None:
         connections = await handshake_all(config, registry)
         elapsed = time.perf_counter() - started
 
-        assert connections == {}
+        assert set(connections) == {"hang"}  # config 镜像：超时者也在场
+        assert connections["hang"].client is None
         entry = registry.get("hang")
         assert entry is not None
         assert entry.state == "unreachable"
@@ -286,7 +288,8 @@ async def test_index_write_failure_is_fail_soft_not_false_live(
 
     connections = await handshake_all(config, registry)
     try:
-        assert connections == {}
+        assert set(connections) == {"hr"}  # config 镜像：写盘失败者也在场
+        assert connections["hr"].client is None
         entry = registry.get("hr")
         assert entry is not None
         assert entry.state == "unreachable"

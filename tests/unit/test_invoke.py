@@ -163,12 +163,14 @@ async def test_unknown_tool_on_known_server_is_proxy_error(tmp_path: Path) -> No
 
 
 async def test_configured_but_unreachable_is_self_contained_error(tmp_path: Path) -> None:
+    dead = FakeUpstream(lambda n, a: None)
+    dead.client = None  # config 镜像：死连接对象在场，死活长在对象上
     registry = HealthRegistry()
     registry.record_unreachable("dead_http", reason="connection refused")
     proxy = build_proxy(
         tmp_path,
         registry=registry,
-        connections={},
+        connections={"dead_http": dead},
         config_servers={
             "dead_http": ServerEntry(
                 name="dead_http", transport="http", url="http://127.0.0.1:1/mcp"

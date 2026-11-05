@@ -1,4 +1,4 @@
-"""B01 交互探针：真实启动路径（console script + --config）的人工/管道验收工具。
+"""B02 交互探针：真实启动路径（console script + --config）的人工/管道验收工具。
 
 用法（仓库根目录）:
     uv run python tests/e2e/probe.py            # 交互模式
@@ -8,8 +8,16 @@
     leave                      关键词搜索（空白分隔 = 多个关键词）
     invoke hr__get_employee {"employee_id": "E-1"}   透传调用
     status                     健康快照
+    tools                      拉取 tools/list，打印 search_mcp_tool 的
+                               description（验证服务清单动态注入）
+    kill itops                 停掉 probe 自己拉起的 demo server（itops/
+                               fleet_gen/docs；hr 与 broken 由代理 spawn，
+                               探针无句柄）
+    start itops                重新拉起（驱动刷新自愈演示）
 
-每次搜索后打印上下文账单：本次响应 chars/4 vs 直挂全部索引 chars/4。
+config 含 5 上游（hr stdio / itops+fleet_gen Streamable HTTP / docs SSE /
+broken 启动即崩）+ refresh_interval=30——死亡→翻转→恢复→list_changed 的
+完整自愈环演示节奏。收到的 tools/list_changed 通知打印到 stderr。
 """
 
 from __future__ import annotations
@@ -29,6 +37,10 @@ from mcp.client.stdio import StdioServerParameters
 from mcp.types import CallToolResult
 
 DEMO_DIR = Path(__file__).resolve().parent / "demo_servers"
+
+# probe 自己 Popen 的远程型 demo（kill/start 演示目标）与端口键位
+REMOTE_DEMOS: dict[str, tuple[str, int]] = {}  # name -> (script, port)，运行期填充
+_live_procs: dict[str, subprocess.Popen] = {}  # name -> Popen，运行期填充
 
 
 def free_port() -> int:
@@ -75,7 +87,7 @@ def start_demo(script_name: str, port: int) -> subprocess.Popen:
     )
 
 
-def write_demo_config(root: Path, itops_port: int, audit_port: int, dead_port: int) -> Path:
+def write_demo_config(root: Path, fleet_port: int, itops_port: int, docs_port: int) -> Path:
     config = {
         "mcpServers": {
             "hr": {
@@ -83,12 +95,17 @@ def write_demo_config(root: Path, itops_port: int, audit_port: int, dead_port: i
                 "args": [str(DEMO_DIR / "hr.py")],
             },
             "itops": {"url": f"http://127.0.0.1:{itops_port}/mcp"},
-            "audit": {"url": f"http://127.0.0.1:{audit_port}/sse", "type": "sse"},
-            "dead_http": {"url": f"http://127.0.0.1:{dead_port}/mcp"},
+            "fleet_gen": {"url": f"http://127.0.0.1:{fleet_port}/mcp"},
+            "docs": {"url": f"http://127.0.0.1:{docs_port}/sse", "type": "sse"},
+            "broken": {
+                "command": sys.executable,
+                "args": [str(DEMO_DIR / "broken.py")],
+            },
         },
         "settings": {
-            "threshold": 5,  # 演示值：region 植入 6 个工具即触发超量路径
+            "threshold": 5,  # 演示值：region 植入 6+ 工具即触发超量路径
             "handshake_timeout": 15,
+            "refresh_interval": 30,  # 演示节奏：一轮刷新 30s（开发/测试期统一值）
             "index_dir": str(root / "tools_index"),
         },
     }
@@ -118,81 +135,166 @@ def print_bill(text: str, index_dir: Path) -> None:
     )
 
 
-async def run_probe() -> None:
-    root = Path(tempfile.mkdtemp(prefix="grep-mcp-probe-"))
-    itops_port, audit_port, dead_port = pick_ports(3)
-    procs = [start_demo("itops.py", itops_port), start_demo("audit.py", audit_port)]
-    try:
-        wait_port_accepts(itops_port)
-        wait_port_accepts(audit_port)
-        config_path = write_demo_config(root, itops_port, audit_port, dead_port)
-        index_dir = root / "tools_index"
-        command = console_script()
+async def on_message(message) -> None:
+    """打印代理发来的 list_changed 通知（旧代 initialize 推送观察点）。
 
-        # 现场取证：dead 端口在握手前必须无人应答（防端口竞态）
-        try:
-            with socket.create_connection(("127.0.0.1", dead_port), timeout=1):
+    注：SDK 2.3.0 Client 默认协商 2026-07-28 新代协议，此模式下变更通知
+    只经 subscriptions/listen 流——旧代推送对它无效，本观察点留作
+    旧代客户端形态的占位；新代事件观察见 listen_printer。
+    """
+    method = getattr(message, "method", None) or (
+        message.get("method") if isinstance(message, dict) else None
+    )
+    if method and "list_changed" in str(method):
+        print(f"[probe] received notification: {method}", file=sys.stderr)
+
+
+async def listen_printer(client: Client) -> None:
+    """订阅 subscriptions/listen 并打印收到的变更事件（新代观察点）。"""
+    try:
+        async with client.listen(tools_list_changed=True) as sub:
+            async for event in sub:
                 print(
-                    f"probe: WARNING dead port {dead_port} is unexpectedly listening",
+                    f"[probe] received subscription event: {type(event).__name__}; "
+                    "re-pull tools/list to see the new roster",
                     file=sys.stderr,
                 )
-        except OSError:
-            pass
+    except Exception as exc:
+        print(f"[probe] listen ended: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
+async def run_probe() -> None:
+    root = Path(tempfile.mkdtemp(prefix="grep-mcp-probe-"))
+    fleet_port, itops_port, docs_port = pick_ports(3)
+    _live_procs.update(
+        {
+            "fleet_gen": start_demo("fleet_gen.py", fleet_port),
+            "itops": start_demo("itops.py", itops_port),
+            "docs": start_demo("docs.py", docs_port),
+        }
+    )
+    REMOTE_DEMOS.update(
+        {
+            "fleet_gen": ("fleet_gen.py", fleet_port),
+            "itops": ("itops.py", itops_port),
+            "docs": ("docs.py", docs_port),
+        }
+    )
+    try:
+        for name, (_script, port) in REMOTE_DEMOS.items():
+            wait_port_accepts(port)
+        config_path = write_demo_config(root, fleet_port, itops_port, docs_port)
+        index_dir = root / "tools_index"
+        command = console_script()
 
         print(
             f"probe: starting {command[0]} --config {config_path}",
             file=sys.stderr,
         )
         print(
-            f"probe: ports itops={itops_port} audit={audit_port} dead={dead_port}",
+            f"probe: ports fleet_gen={fleet_port} itops={itops_port} docs={docs_port}; "
+            "refresh_interval=30s; hr/broken are proxied stdio children",
             file=sys.stderr,
         )
         print(
-            "probe: type keywords, 'invoke <target> <json>', or 'status'; EOF exits.",
+            "probe: type keywords, 'invoke <target> <json>', 'status', 'tools', "
+            "'kill/start <server>'; EOF exits.",
             file=sys.stderr,
         )
 
         params = StdioServerParameters(command=command[0], args=[*command[1:], "--config", str(config_path)])
-        async with Client(params) as client:
-            while True:
-                line = await asyncio.to_thread(sys.stdin.readline)
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-
-                if line == "status":
-                    result = await client.call_tool("check_mcp_status", {})
-                    print(text_of(result))
-                    continue
-
-                if line.startswith("invoke "):
-                    parts = line.split(maxsplit=2)
-                    if len(parts) < 2:
-                        print("usage: invoke <target> <json>")
-                        continue
-                    target = parts[1]
-                    payload = json.loads(parts[2]) if len(parts) > 2 else {}
-                    result = await client.call_tool(
-                        "invoke_this_tool", {"target": target, "params": payload}
-                    )
-                    print(text_of(result))
-                    if result.is_error:
-                        print("[is_error]", file=sys.stderr)
-                    continue
-
-                keywords = line.split()
-                result = await client.call_tool("search_mcp_tool", {"keywords": keywords})
-                text = text_of(result)
-                print(text)
-                print_bill(text, index_dir)
+        async with Client(params, message_handler=on_message) as client:
+            listener = asyncio.create_task(listen_printer(client))
+            try:
+                await _command_loop(client, index_dir)
+            finally:
+                listener.cancel()  # EOF 与异常路径共用：先收订阅任务再断开
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listener
     finally:
-        for proc in procs:
+        for proc in _live_procs.values():
             with contextlib.suppress(Exception):
                 proc.terminate()
             with contextlib.suppress(Exception):
                 proc.wait(timeout=10)
+        _live_procs.clear()
+
+
+async def _command_loop(client: Client, index_dir: Path) -> None:
+    """交互循环：关键词搜索 / invoke / status / tools / kill / start。"""
+    while True:
+        line = await asyncio.to_thread(sys.stdin.readline)
+        if not line:
+            break
+        line = line.strip()
+        if not line:
+            continue
+
+        if line == "status":
+            result = await client.call_tool("check_mcp_status", {})
+            print(text_of(result))
+            continue
+
+        if line == "tools":
+            listing = await client.list_tools()
+            by_name = {tool.name: tool for tool in listing.tools}
+            print("--- search_mcp_tool description ---")
+            print(by_name["search_mcp_tool"].description or "(empty)")
+            print("--- end ---")
+            continue
+
+        # 前缀匹配（非首 token）：避免劫持名为 kill/start 的关键词搜索
+        if line.startswith("kill ") or line.startswith("start "):
+            parts = line.split()
+            if len(parts) != 2 or parts[1] not in REMOTE_DEMOS:
+                print(
+                    f"usage: {parts[0]} <{'|'.join(sorted(REMOTE_DEMOS))}> "
+                    "(hr/broken are proxied stdio children - probe holds no handle)"
+                )
+                continue
+            name = parts[1]
+            if parts[0] == "kill":
+                proc = _live_procs.get(name)
+                if proc is None or proc.poll() is not None:
+                    print(f"[probe] {name} is not running")
+                    continue
+                proc.terminate()
+                proc.wait(timeout=10)
+                print(f"[probe] killed {name}; wait one refresh round (~30s)")
+            else:
+                if name in _live_procs and _live_procs[name].poll() is None:
+                    print(f"[probe] {name} already running")
+                    continue
+                script, port = REMOTE_DEMOS[name]
+                _live_procs[name] = start_demo(script, port)
+                wait_port_accepts(port)
+                print(f"[probe] started {name}; healing next refresh round (~30s)")
+            continue
+
+        if line.startswith("invoke "):
+            parts = line.split(maxsplit=2)
+            if len(parts) < 2:
+                print("usage: invoke <target> <json>")
+                continue
+            target = parts[1]
+            try:
+                payload = json.loads(parts[2]) if len(parts) > 2 else {}
+            except json.JSONDecodeError as exc:
+                print(f"usage: invoke <target> <json> (bad json: {exc})")
+                continue
+            result = await client.call_tool(
+                "invoke_this_tool", {"target": target, "params": payload}
+            )
+            print(text_of(result))
+            if result.is_error:
+                print("[is_error]", file=sys.stderr)
+            continue
+
+        keywords = line.split()
+        result = await client.call_tool("search_mcp_tool", {"keywords": keywords})
+        text = text_of(result)
+        print(text)
+        print_bill(text, index_dir)
 
 
 def main() -> int:

@@ -220,3 +220,105 @@ async def test_full_chain_search_invoke_passthrough_and_destructive_marker(
             await close_all(connections.values())
     finally:
         await stop_process(proc)
+
+
+async def test_fleet_gen_http_handshake_indexes_42_tools(tmp_path: Path) -> None:
+    port = free_port()
+    proc = await start_remote("fleet_gen.py", port)
+    try:
+        await wait_port_accepts(port)
+        index_dir = tmp_path / "idx"
+        config = Config(
+            servers={
+                "fleet_gen": ServerEntry(
+                    name="fleet_gen",
+                    transport="http",
+                    url=f"http://127.0.0.1:{port}/mcp",
+                )
+            },
+            settings=Settings(handshake_timeout=20, index_dir=str(index_dir)),
+            config_path=tmp_path / "config.json",
+        )
+        registry = HealthRegistry()
+        connections = await handshake_all(config, registry)
+        try:
+            entry = registry.get("fleet_gen")
+            assert entry is not None and entry.state == "live"
+            assert entry.tools == 42
+            lines = read_index_lines(index_dir, "fleet_gen")
+            assert len(lines) == 42
+            assert all('"name":"region_' in line for line in lines)
+        finally:
+            await close_all(connections.values())
+    finally:
+        await stop_process(proc)
+
+
+async def test_docs_sse_handshake_indexes_six_tools(tmp_path: Path) -> None:
+    port = free_port()
+    proc = await start_remote("docs.py", port)
+    try:
+        await wait_port_accepts(port)
+        index_dir = tmp_path / "idx"
+        config = Config(
+            servers={
+                "docs": ServerEntry(
+                    name="docs",
+                    transport="sse",
+                    url=f"http://127.0.0.1:{port}/sse",
+                )
+            },
+            settings=Settings(handshake_timeout=20, index_dir=str(index_dir)),
+            config_path=tmp_path / "config.json",
+        )
+        registry = HealthRegistry()
+        connections = await handshake_all(config, registry)
+        try:
+            entry = registry.get("docs")
+            assert entry is not None and entry.state == "live"
+            assert entry.tools == 6
+            lines = read_index_lines(index_dir, "docs")
+            assert len(lines) == 6
+            joined = "\n".join(lines)
+            assert '"name":"delete_document"' in joined
+            assert any("region" in line for line in lines)
+        finally:
+            await close_all(connections.values())
+    finally:
+        await stop_process(proc)
+
+
+async def test_broken_stdio_fails_soft(tmp_path: Path, capsys) -> None:
+    index_dir = tmp_path / "idx"
+    config = Config(
+        servers={
+            "broken": ServerEntry(
+                name="broken",
+                transport="stdio",
+                command=sys.executable,
+                args=[str(DEMO_DIR / "broken.py")],
+            ),
+            "hr": ServerEntry(
+                name="hr",
+                transport="stdio",
+                command=sys.executable,
+                args=[str(DEMO_DIR / "hr.py")],
+            ),
+        },
+        settings=Settings(handshake_timeout=20, index_dir=str(index_dir)),
+        config_path=tmp_path / "config.json",
+    )
+    registry = HealthRegistry()
+    connections = await handshake_all(config, registry)
+    try:
+        broken = registry.get("broken")
+        assert broken is not None and broken.state == "unreachable"
+        hr = registry.get("hr")
+        assert hr is not None and hr.state == "live"
+        assert not (index_dir / "broken.jsonl").exists()
+        assert (index_dir / "hr.jsonl").exists()
+        # 失败轮出声：stderr 一行含服务名与原因（日志纪律）
+        err = capsys.readouterr().err
+        assert "broken handshake failed" in err
+    finally:
+        await close_all(connections.values())

@@ -35,6 +35,23 @@ def _passed(transcript: Transcript) -> bool:
     return bool(_verdict_field(transcript, "passed", False))
 
 
+def _strict_passed(transcript: Transcript) -> bool:
+    """严格口径通过；缺字段时回退到 `passed`（兼容旧 transcript）。"""
+    verdict = transcript.verdict
+    if verdict is None:
+        return False
+    if isinstance(verdict, dict):
+        return bool(verdict.get("strict_passed", verdict.get("passed", False)))
+    return bool(getattr(verdict, "strict_passed", getattr(verdict, "passed", False)))
+
+
+def _extra_calls(transcript: Transcript) -> tuple[str, ...]:
+    value = _verdict_field(transcript, "extra_calls", ())
+    if isinstance(value, (list, tuple)):
+        return tuple(value)
+    return ()
+
+
 def _tool_name(call: dict) -> str:
     return str(call.get("name") or "")
 
@@ -102,6 +119,23 @@ def derive_metrics(
         task_id: per_task[task_id].get("a", 0) - per_task[task_id].get("b", 0)
         for task_id in task_ids
     }
+
+    # ---- 严格口径对照（旧规则：无任何额外调用）----
+    strict_per_task: dict[str, dict[str, int]] = {
+        task_id: {arm: 0 for arm in ARMS} for task_id in task_ids
+    }
+    strict_totals: dict[str, int] = {arm: 0 for arm in ARMS}
+    extra_calls: dict[str, int] = {arm: 0 for arm in ARMS}
+    for transcript in transcripts:
+        bucket = strict_per_task.setdefault(
+            transcript.task_id, {arm: 0 for arm in ARMS}
+        )
+        if _strict_passed(transcript):
+            bucket[transcript.arm] = bucket.get(transcript.arm, 0) + 1
+            strict_totals[transcript.arm] = strict_totals.get(transcript.arm, 0) + 1
+        extra_calls[transcript.arm] = extra_calls.get(transcript.arm, 0) + len(
+            _extra_calls(transcript)
+        )
 
     # ---- 幻觉率（负样本）----
     hallucination_rate: dict[str, float] = {}
@@ -213,6 +247,9 @@ def derive_metrics(
     return {
         "per_task": per_task,
         "pairing": pairing,
+        "strict_per_task": strict_per_task,
+        "strict_totals": strict_totals,
+        "extra_calls": extra_calls,
         "self_discovery": discovery["a"],
         "hallucination_rate": hallucination_rate,
         "searches_per_task": searches_per_task,

@@ -156,6 +156,39 @@ def test_t3_fails_when_another_region_tool_is_called() -> None:
     assert verdict.passed is False
 
 
+def test_t3_same_service_extra_report_is_allowed_without_strict() -> None:
+    verdict = judge(
+        _task("t3_over"),
+        "b",
+        [
+            _call("fleet_gen__region_east_1_report", {"area": "east_1"}),
+            _call("fleet_gen__region_east_2_report", {"area": "east_2"}),
+        ],
+        "east_1 区机队正常。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is True
+    assert verdict.strict_passed is False
+    assert verdict.extra_calls == ("fleet_gen__region_east_2_report",)
+
+
+def test_t3_cross_service_extra_tool_fails() -> None:
+    verdict = judge(
+        _task("t3_over"),
+        "b",
+        [
+            _call("fleet_gen__region_east_1_report", {"area": "east_1"}),
+            _call("itops__region_capacity"),
+        ],
+        "east_1 区机队正常。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is False
+    assert "itops__region_capacity" in verdict.reason
+
+
 def test_t4_passes_when_chain_is_ordered_and_reason_contains() -> None:
     verdict = judge(
         _task("t4_chain"),
@@ -172,6 +205,51 @@ def test_t4_passes_when_chain_is_ordered_and_reason_contains() -> None:
     )
 
     assert verdict.passed is True
+
+
+def test_t4_same_service_read_between_steps_keeps_order_and_passes() -> None:
+    verdict = judge(
+        _task("t4_chain"),
+        "a",
+        [
+            _invoke("hr__get_leave_balance", {"employee_id": "E1001"}),
+            _invoke("hr__get_employee", {"employee_id": "E1001"}),
+            _invoke(
+                "hr__apply_leave",
+                {"employee_id": "E1001", "days": 2, "reason": "家事"},
+            ),
+        ],
+        "已提交 2 天年假申请。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is True
+    assert verdict.strict_passed is False
+    assert verdict.extra_calls == ("hr__get_employee",)
+
+
+def test_t4_repeated_write_call_fails() -> None:
+    verdict = judge(
+        _task("t4_chain"),
+        "a",
+        [
+            _invoke("hr__get_leave_balance", {"employee_id": "E1001"}),
+            _invoke(
+                "hr__apply_leave",
+                {"employee_id": "E1001", "days": 2, "reason": "家事"},
+            ),
+            _invoke(
+                "hr__apply_leave",
+                {"employee_id": "E1001", "days": 2, "reason": "家事"},
+            ),
+        ],
+        "已提交 2 天年假申请。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is False
+    assert verdict.strict_passed is False
+    assert "repeated write/destructive" in verdict.reason
 
 
 def test_t4_fails_with_only_one_step() -> None:
@@ -267,12 +345,115 @@ def test_t6_fails_when_docs_interference_tool_is_called() -> None:
     assert "docs__search_docs" in verdict.reason
 
 
+def test_t2_same_service_exploration_passes_without_strict() -> None:
+    verdict = judge(
+        _task("t2_vocab"),
+        "b",
+        [
+            _call("audit__list_audit_events"),
+            _call("audit__audit_trail_retention"),
+        ],
+        "查到了。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is True
+    assert verdict.strict_passed is False
+    assert verdict.extra_calls == ("audit__list_audit_events",)
+
+
+def test_t2_cross_service_exploration_still_fails() -> None:
+    verdict = judge(
+        _task("t2_vocab"),
+        "b",
+        [
+            _call("docs__search_docs", {"query": "变更历史"}),
+            _call("audit__audit_trail_retention"),
+        ],
+        "查到了。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is False
+    assert verdict.strict_passed is False
+    assert "docs__search_docs" in verdict.reason
+
+
+def test_t1_write_tool_outside_expected_fails() -> None:
+    verdict = judge(
+        _task("t1_explicit"),
+        "a",
+        [
+            _invoke("hr__get_leave_balance", {"employee_id": "E1001"}),
+            _invoke(
+                "hr__apply_leave",
+                {"employee_id": "E1001", "days": 2, "reason": "家事"},
+            ),
+        ],
+        "查到了。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is False
+    assert verdict.strict_passed is False
+    assert "hr__apply_leave" in verdict.reason
+
+
+def test_t6_same_service_read_only_exploration_is_allowed() -> None:
+    verdict = judge(
+        _task("t6_split"),
+        "b",
+        [
+            _call("itops__search", {"query": "部署文档"}),
+            _call("hr__search", {"query": "张三"}),
+            _call("hr__get_employee", {"employee_id": "E1001"}),
+        ],
+        "查到了。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is True
+    assert verdict.strict_passed is False
+    assert verdict.extra_calls == ("hr__get_employee",)
+
+
+def test_t6_cross_service_read_only_exploration_fails() -> None:
+    verdict = judge(
+        _task("t6_split"),
+        "b",
+        [
+            _call("itops__search", {"query": "部署文档"}),
+            _call("hr__search", {"query": "张三"}),
+            _call("docs__list_documents"),
+        ],
+        "查到了。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is False
+    assert "docs__list_documents" in verdict.reason
+
+
+def test_no_extra_calls_keeps_strict_passed() -> None:
+    verdict = judge(
+        _task("t2_vocab"),
+        "b",
+        [_call("audit__audit_trail_retention")],
+        "查到了。",
+        gave_up=False,
+    )
+
+    assert verdict.passed is True
+    assert verdict.strict_passed is True
+    assert verdict.extra_calls == ()
+
+
 def test_unrelated_tool_fails_even_when_expected_tool_is_called() -> None:
     verdict = judge(
         _task("t1_explicit"),
         "b",
         [
-            _call("hr__get_employee", {"employee_id": "E1001"}),
+            _call("docs__search_docs", {"query": "年假"}),
             _call("hr__get_leave_balance", {"employee_id": "E1001"}),
         ],
         "查到了。",
@@ -280,7 +461,7 @@ def test_unrelated_tool_fails_even_when_expected_tool_is_called() -> None:
     )
 
     assert verdict.passed is False
-    assert "hr__get_employee" in verdict.reason
+    assert "docs__search_docs" in verdict.reason
 
 
 def test_param_value_mismatch_fails() -> None:
@@ -337,6 +518,7 @@ def test_negative_hallucinates_when_any_upstream_tool_is_invoked() -> None:
 
     assert verdict.passed is False
     assert verdict.hallucinated is True
+    assert verdict.strict_passed is False
 
 
 def test_negative_direct_arm_hallucinates_on_any_call() -> None:
@@ -350,6 +532,7 @@ def test_negative_direct_arm_hallucinates_on_any_call() -> None:
 
     assert verdict.passed is False
     assert verdict.hallucinated is True
+    assert verdict.strict_passed is False
 
 
 def test_negative_vague_answer_fails_without_denial_word() -> None:

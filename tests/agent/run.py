@@ -295,6 +295,8 @@ def _record_failure(
             "passed": False,
             "reason": f"run failed: {type(error).__name__}",
             "hallucinated": False,
+            "strict_passed": False,
+            "extra_calls": [],
         },
         duration_s=duration_s,
     )

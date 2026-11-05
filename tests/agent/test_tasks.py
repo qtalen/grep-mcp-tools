@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from tests.agent.tasks import COMPLETION_WORDS, NEGATIVE_WORDS, TASKS, TaskSpec
+from tests.agent.tasks import (
+    COMPLETION_WORDS,
+    NEGATIVE_WORDS,
+    TASKS,
+    WRITE_OR_DESTRUCTIVE,
+    TaskSpec,
+)
 
 EXPECTED_IDS = [
     "t1_explicit",
@@ -63,13 +69,6 @@ def test_flags_are_correct() -> None:
     assert all(task.negative is False for task in TASKS if task.id != "t5_negative")
 
 
-def test_whitelist_covers_expected_and_excludes_interference() -> None:
-    for task in TASKS:
-        assert set(task.expected) <= task.whitelist
-    assert _by_id("t5_negative").whitelist == frozenset()
-    assert "docs__search_docs" not in _by_id("t6_split").whitelist
-
-
 def test_param_rules_are_declared_for_expected_targets() -> None:
     assert _by_id("t1_explicit").param_rules == {
         "hr__get_leave_balance": {"employee_id": "E1001"}
@@ -84,6 +83,30 @@ def test_param_rules_are_declared_for_expected_targets() -> None:
         "itops__search": {"query": None},
         "hr__search": {"query": None},
     }
+
+
+def test_allowed_services_match_expected_targets() -> None:
+    assert _by_id("t1_explicit").allowed_services == frozenset({"hr"})
+    assert _by_id("t2_vocab").allowed_services == frozenset({"audit"})
+    assert _by_id("t3_over").allowed_services == frozenset({"fleet_gen"})
+    assert _by_id("t4_chain").allowed_services == frozenset({"hr"})
+    assert _by_id("t5_negative").allowed_services == frozenset()
+    assert _by_id("t6_split").allowed_services == frozenset({"itops", "hr"})
+
+
+def test_write_or_destructive_set_matches_batch_contract() -> None:
+    assert WRITE_OR_DESTRUCTIVE == frozenset(
+        {
+            "hr__apply_leave",
+            "hr__approve_leave",
+            "itops__create_ticket",
+            "itops__deploy_service",
+            "itops__rollback_deploy",
+            "docs__upload_document",
+            "docs__delete_document",
+        }
+    )
+    assert len(WRITE_OR_DESTRUCTIVE) == 7
 
 
 def test_negative_and_completion_word_lists_are_versioned() -> None:

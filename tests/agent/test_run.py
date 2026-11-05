@@ -483,6 +483,8 @@ def test_run_experiment_records_failure_and_continues(
         "passed": False,
         "reason": "run failed: RuntimeError",
         "hallucinated": False,
+        "strict_passed": False,
+        "extra_calls": [],
     }
     assert is_run_complete(first_path) is True
 

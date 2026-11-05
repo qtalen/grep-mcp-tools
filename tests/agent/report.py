@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from tests.agent.metrics import ARMS, PROXY_ARMS, derive_metrics
@@ -27,7 +27,10 @@ def _passed(transcript: Transcript) -> bool:
 
 
 def _arm_totals(
-    transcripts: Sequence[Transcript], task_ids: Sequence[str], arms: Sequence[str]
+    transcripts: Sequence[Transcript],
+    task_ids: Sequence[str],
+    arms: Sequence[str],
+    passed_fn: Callable[[Transcript], bool] = _passed,
 ) -> tuple[dict[str, dict[str, dict[str, int]]], dict[str, dict[str, int]]]:
     """逐任务 / 逐臂的 passed/total 计数，以及各臂总计。"""
     per_task: dict[str, dict[str, dict[str, int]]] = {
@@ -43,7 +46,7 @@ def _arm_totals(
             continue
         bucket[transcript.arm]["total"] += 1
         totals[transcript.arm]["total"] += 1
-        if _passed(transcript):
+        if passed_fn(transcript):
             bucket[transcript.arm]["passed"] += 1
             totals[transcript.arm]["passed"] += 1
     return per_task, totals
@@ -81,6 +84,33 @@ def build_report(
     }
 
     ablation_per_task, ablation_totals = _arm_totals(transcripts, task_ids, PROXY_ARMS)
+
+    # 严格口径直接消费 metrics 的派生结果（passed 数），total 复用同一批样本计数。
+    strict_metrics_per_task = metrics["strict_per_task"]
+    strict_metrics_totals = metrics["strict_totals"]
+    strict_per_task = {
+        task_id: {
+            arm: {
+                "passed": strict_metrics_per_task.get(task_id, {}).get(arm, 0),
+                "total": per_task[task_id][arm]["total"],
+            }
+            for arm in ARMS
+        }
+        for task_id in task_ids
+    }
+    strict_totals = {
+        arm: {
+            "passed": strict_metrics_totals.get(arm, 0),
+            "total": totals[arm]["total"],
+        }
+        for arm in ARMS
+    }
+    strict_pairing = {
+        task_id: strict_per_task[task_id]["a"]["passed"]
+        - strict_per_task[task_id]["b"]["passed"]
+        for task_id in task_ids
+    }
+    strict_delta = strict_totals["a"]["passed"] - strict_totals["b"]["passed"]
 
     proxy_pass = totals["a"]["passed"]
     direct_pass = totals["b"]["passed"]
@@ -121,6 +151,13 @@ def build_report(
         "per_task": per_task,
         "pairing": pairing,
         "totals": totals,
+        "strict": {
+            "per_task": strict_per_task,
+            "pairing": strict_pairing,
+            "totals": strict_totals,
+            "delta": strict_delta,
+            "extra_calls": metrics["extra_calls"],
+        },
         "self_discovery": self_discovery,
         "hallucination_rate": metrics["hallucination_rate"],
         "diagnostics": {
@@ -169,6 +206,11 @@ def render_markdown(report: dict) -> str:
     # ---- A/B 主表 ----
     lines.append("## A/B 主表")
     lines.append("")
+    lines.append(
+        "- 主口径：期望目标全部正确完成 + 额外调用限同服务只读；"
+        "严格口径（仅对照）：无任何额外调用"
+    )
+    lines.append("")
     lines.append("| 任务 | " + " | ".join(arms) + " | a-b |")
     lines.append("|---|" + "---|" * (len(arms) + 1))
     for task_id in report["tasks"]:
@@ -180,6 +222,14 @@ def render_markdown(report: dict) -> str:
             f"| {task_id} | " + " | ".join(row) + f" | {report['pairing'][task_id]:+d} |"
         )
     lines.append("")
+
+    strict = report["strict"]
+    lines.append(
+        "- 严格口径（无任何额外调用，仅对照）："
+        + _arm_list(strict["totals"], _ratio)
+        + f"；a-b 差值 {strict['delta']:+d}；额外工具名计数（去重） "
+        + _arm_list(strict["extra_calls"], str)
+    )
 
     self_discovery = report["self_discovery"]
     lines.append(

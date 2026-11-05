@@ -9,8 +9,20 @@ from tests.agent.transcript import Transcript, make_run_id
 _DEFAULT = object()
 
 
-def _verdict(passed: bool, reason: str = "ok", hallucinated: bool = False) -> dict:
-    return {"passed": passed, "reason": reason, "hallucinated": hallucinated}
+def _verdict(
+    passed: bool,
+    reason: str = "ok",
+    hallucinated: bool = False,
+    strict_passed: bool = True,
+    extra_calls: tuple[str, ...] = (),
+) -> dict:
+    return {
+        "passed": passed,
+        "reason": reason,
+        "hallucinated": hallucinated,
+        "strict_passed": strict_passed,
+        "extra_calls": list(extra_calls),
+    }
 
 
 def _call(name: str, result: str = "", **arguments: object) -> dict:
@@ -335,6 +347,70 @@ def test_empty_transcripts_yield_zero_metrics_without_division_errors() -> None:
         "total": 0,
     }
     assert metrics["ablation"]["passed"] == {"a": 0, "c": 0, "d": 0}
+
+
+def test_strict_metrics_and_extra_call_counts() -> None:
+    transcripts = [
+        _transcript(
+            "a",
+            "t1_explicit",
+            1,
+            verdict=_verdict(
+                True,
+                strict_passed=False,
+                extra_calls=("hr__get_employee",),
+            ),
+        ),
+        _transcript("a", "t1_explicit", 2, verdict=_verdict(True)),
+        _transcript(
+            "a",
+            "t2_vocab",
+            1,
+            verdict=_verdict(
+                False,
+                strict_passed=False,
+                extra_calls=("audit__list_audit_events", "docs__search_docs"),
+            ),
+        ),
+        _transcript("b", "t1_explicit", 1, verdict=_verdict(True)),
+    ]
+
+    metrics = derive_metrics(transcripts, TASKS)
+
+    assert metrics["strict_per_task"]["t1_explicit"] == {
+        "a": 1,
+        "b": 1,
+        "c": 0,
+        "d": 0,
+    }
+    assert metrics["strict_per_task"]["t2_vocab"]["a"] == 0
+    assert metrics["strict_totals"] == {"a": 1, "b": 1, "c": 0, "d": 0}
+    assert metrics["extra_calls"] == {"a": 3, "b": 0, "c": 0, "d": 0}
+
+
+def test_legacy_verdict_defaults_to_strict_and_zero_extras() -> None:
+    legacy = {"passed": True, "reason": "ok", "hallucinated": False}
+
+    metrics = derive_metrics(
+        [_transcript("a", "t1_explicit", 1, verdict=legacy)], TASKS
+    )
+
+    assert metrics["per_task"]["t1_explicit"]["a"] == 1
+    assert metrics["strict_totals"]["a"] == 1
+    assert metrics["extra_calls"]["a"] == 0
+
+
+def test_legacy_failed_verdict_without_strict_key_is_not_strict_pass() -> None:
+    # 旧 transcript 没有 strict_passed 键：必须回退到 passed，而不是默认 True。
+    legacy = {"passed": False, "reason": "expected tools not called"}
+
+    metrics = derive_metrics(
+        [_transcript("a", "t1_explicit", 1, verdict=legacy)], TASKS
+    )
+
+    assert metrics["per_task"]["t1_explicit"]["a"] == 0
+    assert metrics["strict_totals"]["a"] == 0
+    assert metrics["strict_per_task"]["t1_explicit"]["a"] == 0
 
 
 def test_transcript_without_verdict_is_not_counted_as_pass() -> None:

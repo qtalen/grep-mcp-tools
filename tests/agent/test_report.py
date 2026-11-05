@@ -9,8 +9,20 @@ from tests.agent.tasks import TASKS
 from tests.agent.transcript import Transcript, make_run_id
 
 
-def _verdict(passed: bool, hallucinated: bool = False, reason: str = "ok") -> dict:
-    return {"passed": passed, "reason": reason, "hallucinated": hallucinated}
+def _verdict(
+    passed: bool,
+    hallucinated: bool = False,
+    reason: str = "ok",
+    strict_passed: bool = True,
+    extra_calls: tuple[str, ...] = (),
+) -> dict:
+    return {
+        "passed": passed,
+        "reason": reason,
+        "hallucinated": hallucinated,
+        "strict_passed": strict_passed,
+        "extra_calls": list(extra_calls),
+    }
 
 
 def _transcript(
@@ -21,6 +33,8 @@ def _transcript(
     hallucinated: bool = False,
     tool_calls: list[dict] | None = None,
     usages: list[dict] | None = None,
+    strict_passed: bool = True,
+    extra_calls: tuple[str, ...] = (),
 ) -> Transcript:
     return Transcript(
         run_id=make_run_id(arm, task_id, rep),
@@ -32,7 +46,12 @@ def _transcript(
         usages=usages or [],
         final_text="",
         gave_up=False,
-        verdict=_verdict(passed, hallucinated),
+        verdict=_verdict(
+            passed,
+            hallucinated,
+            strict_passed=strict_passed,
+            extra_calls=extra_calls,
+        ),
         duration_s=0.1,
     )
 
@@ -191,6 +210,76 @@ def test_criteria_fail_when_proxy_gap_exceeds_budget() -> None:
     assert criteria["all_passed"] is False
 
 
+def test_strict_comparison_is_reported_alongside_new_metric() -> None:
+    transcripts = [
+        _transcript(
+            "a",
+            "t1_explicit",
+            1,
+            strict_passed=False,
+            extra_calls=("hr__get_employee",),
+        ),
+        _transcript("b", "t1_explicit", 1),
+        _transcript("b", "t1_explicit", 2, passed=False, strict_passed=False),
+    ]
+
+    report = build_report(transcripts, TASKS)
+
+    assert report["totals"]["a"] == {"passed": 1, "total": 1}
+    assert report["strict"]["totals"]["a"] == {"passed": 0, "total": 1}
+    assert report["strict"]["totals"]["b"] == {"passed": 1, "total": 2}
+    assert report["strict"]["delta"] == -1
+    assert report["strict"]["pairing"]["t1_explicit"] == -1
+    # M2 只看新口径，严格口径不参与判定。
+    assert report["criteria"]["proxy_vs_direct"]["delta"] == 0
+
+    markdown = render_markdown(report)
+    assert "严格口径" in markdown
+    assert "仅对照" in markdown
+
+
+def test_legacy_verdict_without_strict_key_does_not_inflate_strict() -> None:
+    transcript = Transcript(
+        run_id=make_run_id("a", "t1_explicit", 1),
+        arm="a",
+        task_id="t1_explicit",
+        rep=1,
+        messages=[],
+        tool_calls=[],
+        usages=[],
+        final_text="",
+        gave_up=False,
+        verdict={"passed": False, "reason": "expected tools not called"},
+        duration_s=0.1,
+    )
+
+    report = build_report([transcript], TASKS)
+
+    assert report["strict"]["totals"]["a"] == {"passed": 0, "total": 1}
+    assert report["strict"]["per_task"]["t1_explicit"]["a"] == {
+        "passed": 0,
+        "total": 1,
+    }
+
+
+def test_strict_section_consumes_metrics_derivation() -> None:
+    transcripts = _sample_transcripts()
+    report = build_report(transcripts, TASKS)
+    from tests.agent.metrics import derive_metrics
+
+    metrics = derive_metrics(transcripts, TASKS)
+
+    for arm in ("a", "b", "c", "d"):
+        assert report["strict"]["totals"][arm]["passed"] == metrics["strict_totals"][arm]
+    for task_id in report["tasks"]:
+        for arm in ("a", "b", "c", "d"):
+            assert (
+                report["strict"]["per_task"][task_id][arm]["passed"]
+                == metrics["strict_per_task"][task_id][arm]
+            )
+    assert report["strict"]["extra_calls"] == metrics["extra_calls"]
+
+
 def test_render_markdown_has_two_tables_and_criteria() -> None:
     report = build_report(_sample_transcripts(), TASKS)
 
@@ -207,6 +296,17 @@ def test_render_markdown_has_two_tables_and_criteria() -> None:
     assert "n/a" in markdown
     # 两张表：至少 4 行表头 + 分隔行。
     assert sum(1 for line in markdown.splitlines() if line.startswith("|")) >= 6
+
+
+def test_render_markdown_states_metric_definitions_and_extra_call_label() -> None:
+    markdown = render_markdown(build_report(_sample_transcripts(), TASKS))
+
+    assert (
+        "主口径：期望目标全部正确完成 + 额外调用限同服务只读；"
+        "严格口径（仅对照）：无任何额外调用"
+    ) in markdown
+    assert "额外工具名计数（去重）" in markdown
+    assert "额外调用总数" not in markdown
 
 
 def test_render_markdown_with_resident_reports_reduction() -> None:

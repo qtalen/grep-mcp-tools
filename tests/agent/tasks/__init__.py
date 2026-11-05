@@ -10,7 +10,14 @@ from tests.agent.tasks.tasks import (
     COMPLETION_WORDS,
     NEGATIVE_WORDS,
     TASKS,
+    WRITE_OR_DESTRUCTIVE,
     TaskSpec,
 )
 
-__all__ = ["TaskSpec", "TASKS", "NEGATIVE_WORDS", "COMPLETION_WORDS"]
+__all__ = [
+    "TaskSpec",
+    "TASKS",
+    "NEGATIVE_WORDS",
+    "COMPLETION_WORDS",
+    "WRITE_OR_DESTRUCTIVE",
+]

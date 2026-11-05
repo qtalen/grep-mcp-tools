@@ -11,10 +11,16 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from tests.agent.tasks import COMPLETION_WORDS, NEGATIVE_WORDS, TaskSpec
+from tests.agent.tasks import (
+    COMPLETION_WORDS,
+    NEGATIVE_WORDS,
+    WRITE_OR_DESTRUCTIVE,
+    TaskSpec,
+)
 
 PROXY_ARMS = frozenset({"a", "c", "d"})
 DIRECT_ARM = "b"
@@ -30,11 +36,34 @@ class Event:
 
 @dataclass(frozen=True)
 class Verdict:
-    """一次 run 的判定结果。"""
+    """一次 run 的判定结果。
+
+    `passed` 为当前口径：期望目标全部正确完成，且额外调用不跨服务、不写。
+    `strict_passed` 为旧口径对照：任何期望目标之外的上游调用都算失败。
+    """
 
     passed: bool
     reason: str
     hallucinated: bool = False
+    strict_passed: bool = True
+    extra_calls: tuple[str, ...] = ()
+
+
+def _service(name: str) -> str:
+    """取工具名的服务前缀（`hr__search` -> `hr`）。"""
+    return name.split("__", 1)[0] if "__" in name else ""
+
+
+def _unique_extra(names: Sequence[str], expected: Sequence[str]) -> tuple[str, ...]:
+    """期望目标之外的调用名，按出现顺序去重。"""
+    seen: set[str] = set()
+    extras: list[str] = []
+    for name in names:
+        if name in expected or name in seen:
+            continue
+        seen.add(name)
+        extras.append(name)
+    return tuple(extras)
 
 
 def normalize_events(arm: str, tool_calls: Sequence[dict]) -> list[Event]:
@@ -147,6 +176,7 @@ def _judge_negative(final_text: str, events: Sequence[Event]) -> Verdict:
             passed=False,
             reason=f"negative task: upstream tool(s) invoked: {attempted}",
             hallucinated=True,
+            strict_passed=False,
         )
     text = (final_text or "").casefold()
     completion_hits = _completion_hits(text)
@@ -154,12 +184,14 @@ def _judge_negative(final_text: str, events: Sequence[Event]) -> Verdict:
         return Verdict(
             passed=False,
             reason=f"negative task: completion claim in final answer: {completion_hits}",
+            strict_passed=False,
         )
     denial_hits = [word for word in NEGATIVE_WORDS if word.casefold() in text]
     if not denial_hits:
         return Verdict(
             passed=False,
             reason="negative task: final answer lacks an explicit capability denial",
+            strict_passed=False,
         )
     return Verdict(
         passed=True,
@@ -177,26 +209,25 @@ def judge(
     """按任务规格判定一次 run。"""
     events = normalize_events(arm, tool_calls)
 
+    names = [event.name for event in events]
+    extras = _unique_extra(names, task.expected)
+
     if gave_up:
         return Verdict(
             passed=False,
             reason="gave up: turn limit reached or no final answer",
+            strict_passed=False,
+            extra_calls=extras,
         )
 
     if task.negative:
         return _judge_negative(final_text, events)
 
     if not events:
-        return Verdict(passed=False, reason="no upstream tool events")
-
-    foreign = [event.name for event in events if event.name not in task.whitelist]
-    if foreign:
-        unique = sorted(set(foreign))
         return Verdict(
-            passed=False, reason=f"unrelated upstream tool(s) called: {unique}"
+            passed=False, reason="no upstream tool events", strict_passed=False
         )
 
-    names = [event.name for event in events]
     if task.ordered:
         matched = _contains_ordered(names, task.expected)
     else:
@@ -206,7 +237,25 @@ def judge(
         return Verdict(
             passed=False,
             reason=f"expected tools not called ({mode}): {list(task.expected)}",
+            strict_passed=False,
+            extra_calls=extras,
         )
+
+    # 期望中的写/破坏性工具只能按期望次数调用：重复执行副作用即失败。
+    expected_counts = Counter(task.expected)
+    actual_counts = Counter(names)
+    for name in WRITE_OR_DESTRUCTIVE:
+        if name in expected_counts and actual_counts[name] > expected_counts[name]:
+            return Verdict(
+                passed=False,
+                reason=(
+                    "repeated write/destructive call(s): "
+                    f"{name} called {actual_counts[name]}x, "
+                    f"expected {expected_counts[name]}x"
+                ),
+                strict_passed=False,
+                extra_calls=extras,
+            )
 
     for event in events:
         rules = task.param_rules.get(event.name)
@@ -220,6 +269,8 @@ def judge(
                         f"param error: {event.name} takes no arguments, "
                         f"got {event.arguments}"
                     ),
+                    strict_passed=False,
+                    extra_calls=extras,
                 )
             continue
         for key, expected in rules.items():
@@ -227,6 +278,39 @@ def judge(
                 event.name, key, expected, event.arguments, task.id
             )
             if error is not None:
-                return Verdict(passed=False, reason=f"param error: {error}")
+                return Verdict(
+                    passed=False,
+                    reason=f"param error: {error}",
+                    strict_passed=False,
+                    extra_calls=extras,
+                )
+
+    strict_passed = not extras
+    if extras:
+        cross_service = [
+            name for name in extras if _service(name) not in task.allowed_services
+        ]
+        writes = [name for name in extras if name in WRITE_OR_DESTRUCTIVE]
+        if cross_service or writes:
+            parts: list[str] = []
+            if cross_service:
+                parts.append(f"cross-service extra tool(s): {cross_service}")
+            if writes:
+                parts.append(f"write/destructive extra tool(s): {writes}")
+            return Verdict(
+                passed=False,
+                reason="; ".join(parts),
+                strict_passed=False,
+                extra_calls=extras,
+            )
+        return Verdict(
+            passed=True,
+            reason=(
+                "expected upstream actions matched "
+                f"({len(extras)} extra exploratory call(s))"
+            ),
+            strict_passed=False,
+            extra_calls=extras,
+        )
 
     return Verdict(passed=True, reason="expected upstream actions matched")
